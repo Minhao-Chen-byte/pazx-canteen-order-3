@@ -51,9 +51,12 @@ jobs:
           # 北京时间 15:00 = UTC 07:00
           END_TIME=$(date -d "today 07:00 UTC" +%s)
           NOW_TS=$(date +%s)
-          # 如果因为 cron 延迟导致当前时间已过 15:00，仍执行一次
+          # 非窗口期（手动触发/cron延迟）：只执行一次，不等待
+          OUTSIDE_WINDOW=false
           if [ $NOW_TS -ge $END_TIME ]; then
+            OUTSIDE_WINDOW=true
             END_TIME=$((NOW_TS + 60))
+            echo "[注意] 当前不在订餐窗口内（13:50-15:00 北京时间），执行一次检查"
           fi
 
           CYCLE=0
@@ -67,12 +70,21 @@ jobs:
 
             python auto_order_daemon.py --once
 
+            # 非窗口期只跑一次就退出
+            if [ "$OUTSIDE_WINDOW" = true ]; then
+              break
+            fi
+
             NOW_TS=$(date +%s)
             if [ $NOW_TS -lt $END_TIME ]; then
               REMAIN=$(( (END_TIME - NOW_TS) / 60 ))
-              echo ""
-              echo "[等待] 10 分钟后下次检查（${REMAIN} 分钟后结束）"
-              sleep 600
+              if [ $REMAIN -gt 0 ]; then
+                echo ""
+                echo "[等待] 10 分钟后下次检查（剩余约 ${REMAIN} 分钟）"
+                sleep 600
+              else
+                break
+              fi
             fi
           done
 
