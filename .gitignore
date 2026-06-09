@@ -5,6 +5,7 @@ auto_order_config_*.json
 # 账号配置（含凭证）
 accounts.json
 .github_token
+.master_key
 
 # 日志文件
 auto_order_daemon.log

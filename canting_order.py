@@ -16,8 +16,9 @@ import time
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 from datetime import datetime, timedelta
-from Crypto.Cipher import DES
+from Crypto.Cipher import DES, AES
 from Crypto.Util.Padding import pad
+from Crypto.Random import get_random_bytes
 import base64
 
 # 可选 AI 依赖
@@ -45,6 +46,52 @@ MEAL_NAMES = {1: "早餐", 2: "午餐", 3: "晚餐"}
 MEAL_COLORS = {1: "#FF8C00", 2: "#2E8B57", 3: "#4169E1"}
 
 ACCOUNTS_FILE = os.path.join(os.path.dirname(__file__), "accounts.json")
+MASTER_KEY_FILE = os.path.join(os.path.dirname(__file__), ".master_key")
+ENCRYPTED_PREFIX = "AES$"
+
+
+def _get_or_create_key():
+    """获取或创建本地主密钥（256-bit AES），密钥文件不提交 Git"""
+    if os.path.exists(MASTER_KEY_FILE):
+        with open(MASTER_KEY_FILE, "rb") as f:
+            return f.read()
+    key = get_random_bytes(32)
+    with open(MASTER_KEY_FILE, "wb") as f:
+        f.write(key)
+    # Windows 下隐藏密钥文件
+    try:
+        import subprocess
+        subprocess.run(["attrib", "+H", MASTER_KEY_FILE],
+                       capture_output=True, shell=True)
+    except Exception:
+        pass
+    return key
+
+
+def _encrypt_field(plaintext):
+    """AES-256-GCM 加密字符串，返回带前缀的 base64 密文（已加密的值不再重复加密）"""
+    if not plaintext or plaintext.startswith(ENCRYPTED_PREFIX):
+        return plaintext
+    key = _get_or_create_key()
+    cipher = AES.new(key, AES.MODE_GCM)
+    ciphertext, tag = cipher.encrypt_and_digest(plaintext.encode("utf-8"))
+    return ENCRYPTED_PREFIX + base64.b64encode(
+        cipher.nonce + tag + ciphertext
+    ).decode()
+
+
+def _decrypt_field(encoded):
+    """解密 _encrypt_field 产生的密文，非加密值原样返回"""
+    if not encoded or not encoded.startswith(ENCRYPTED_PREFIX):
+        return encoded
+    try:
+        key = _get_or_create_key()
+        raw = base64.b64decode(encoded[len(ENCRYPTED_PREFIX):])
+        nonce, tag, ciphertext = raw[:16], raw[16:32], raw[32:]
+        cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+        return cipher.decrypt_and_verify(ciphertext, tag).decode("utf-8")
+    except Exception:
+        return encoded  # 解密失败则返回原值，避免数据丢失
 
 
 # ==================== 多账号管理 ====================
@@ -72,7 +119,7 @@ class AccountsManager:
 
     @classmethod
     def load(cls):
-        """加载账号列表并同步 CONFIG_FILE，默认激活第0个"""
+        """加载账号列表（自动解密敏感字段）"""
         try:
             with open(ACCOUNTS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -81,10 +128,17 @@ class AccountsManager:
             if not accounts:
                 accounts = cls.DEFAULT_ACCOUNTS
                 active = 0
+            # 解密敏感字段（__encrypted__ 为 True 时解密，否则按需尝试）
+            is_encrypted = data.get("__encrypted__", False)
+            for acc in accounts:
+                for field in ("username", "password", "g_id"):
+                    val = acc.get(field, "")
+                    if val:
+                        if is_encrypted or val.startswith(ENCRYPTED_PREFIX):
+                            acc[field] = _decrypt_field(val)
         except (FileNotFoundError, json.JSONDecodeError):
             accounts = cls.DEFAULT_ACCOUNTS
             active = 0
-        # 同步 CONFIG_FILE 到当前激活账号的配置文件
         cls._sync_config_file(accounts, active)
         return accounts, active
 
@@ -98,10 +152,17 @@ class AccountsManager:
 
     @classmethod
     def save(cls, accounts, active=0):
-        """保存账号列表并同步配置文件路径"""
+        """保存账号列表（自动加密敏感字段）"""
+        encrypted_accounts = []
+        for acc in accounts:
+            ea = dict(acc)
+            for field in ("username", "password", "g_id"):
+                if field in ea and ea[field]:
+                    ea[field] = _encrypt_field(ea[field])
+            encrypted_accounts.append(ea)
         with open(ACCOUNTS_FILE, "w", encoding="utf-8") as f:
-            json.dump({"accounts": accounts, "active": active}, f,
-                      ensure_ascii=False, indent=2)
+            json.dump({"accounts": encrypted_accounts, "active": active,
+                       "__encrypted__": True}, f, ensure_ascii=False, indent=2)
         cls._sync_config_file(accounts, active)
 
     @classmethod
