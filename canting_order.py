@@ -2061,20 +2061,22 @@ class CanteenApp:
                 progress_var.set("⏳ 创建 GitHub 仓库...")
                 dialog.update()
 
-                # 1. 创建仓库
+                # 1. 创建仓库（空仓库，不含 README）
+                repo_created = False
                 try:
                     _api_gh("POST", "https://api.github.com/user/repos", {
                         "name": repo_name, "private": False,
                         "description": "磐安中学智慧食堂 - 自动订餐",
                         "auto_init": False,
                     })
+                    repo_created = True
                 except urllib.error.HTTPError as e:
                     if e.status == 422:
-                        progress_var.set("⚠️ 仓库已存在，跳过创建")
+                        progress_var.set("⚠️ 仓库已存在，使用现有仓库")
                     else:
                         raise
 
-                # 2. 推送所有代码文件
+                # 2. 推送代码文件（先初始化再批量推送）
                 progress_var.set("⏳ 推送代码文件...")
                 dialog.update()
 
@@ -2088,7 +2090,36 @@ class CanteenApp:
                     ".gitignore",
                 ]
 
-                # 读取所有文件并创建 blobs
+                # 判断仓库是否为空，空则先用 Contents API 初始化
+                try:
+                    _api_gh("GET", f"https://api.github.com/repos/{repo_full}/git/refs/heads/main")
+                    branch = "main"
+                except Exception:
+                    try:
+                        _api_gh("GET", f"https://api.github.com/repos/{repo_full}/git/refs/heads/master")
+                        branch = "master"
+                    except Exception:
+                        # 空仓库：用 Contents API 创建 .gitignore 初始化
+                        gitignore_path = os.path.join(SCRIPT_DIR, ".gitignore")
+                        if os.path.exists(gitignore_path):
+                            with open(gitignore_path, "r", encoding="utf-8") as f:
+                                gi_content = f.read()
+                        else:
+                            gi_content = "__pycache__/\n*.pyc\n"
+                        _api_gh("PUT", f"https://api.github.com/repos/{repo_full}/contents/.gitignore", {
+                            "message": "Initialize repo",
+                            "content": base64.b64encode(gi_content.encode()).decode(),
+                        })
+                        # 新仓库默认分支是 main
+                        branch = "main"
+
+                # 获取当前 HEAD 和 tree
+                head = _api_gh("GET", f"https://api.github.com/repos/{repo_full}/git/refs/heads/{branch}")
+                head_sha = head["object"]["sha"]
+                base_tree = _api_gh("GET",
+                    f"https://api.github.com/repos/{repo_full}/git/commits/{head_sha}")["tree"]["sha"]
+
+                # 用 Git API 批量推送其余文件
                 tree_entries = []
                 for fname in CODE_FILES:
                     fpath = os.path.join(SCRIPT_DIR, fname)
@@ -2106,14 +2137,14 @@ class CanteenApp:
 
                 tree = _api_gh("POST",
                     f"https://api.github.com/repos/{repo_full}/git/trees",
-                    {"tree": tree_entries})
-                commit = _api_gh("POST",
+                    {"base_tree": base_tree, "tree": tree_entries})
+                new_commit = _api_gh("POST",
                     f"https://api.github.com/repos/{repo_full}/git/commits",
-                    {"message": "Initial commit — 磐安中学智慧食堂自动订餐系统",
-                     "tree": tree["sha"], "parents": []})
+                    {"message": "磐安中学智慧食堂自动订餐系统",
+                     "tree": tree["sha"], "parents": [head_sha]})
                 _api_gh("PATCH",
-                    f"https://api.github.com/repos/{repo_full}/git/refs/heads/master",
-                    {"sha": commit["sha"]})
+                    f"https://api.github.com/repos/{repo_full}/git/refs/heads/{branch}",
+                    {"sha": new_commit["sha"]})
 
                 progress_var.set("✓ 代码已推送")
 
@@ -2167,12 +2198,12 @@ class CanteenApp:
 
                 progress_var.set(f"✓ Secrets 已配置 ({ok}/{len(secrets_to_set)})")
 
-                # 4. 触发首次运行
+                # 4. 触发首次运行（使用检测到的分支名）
                 progress_var.set("⏳ 启动自我维持链...")
                 dialog.update()
                 _api_gh("POST",
                     f"https://api.github.com/repos/{repo_full}/actions/workflows/auto-order.yml/dispatches",
-                    {"ref": "master"})
+                    {"ref": branch})
                 progress_var.set("✅ 仓库已就绪，自动订餐链已启动！")
 
             except Exception as e:
