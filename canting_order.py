@@ -2174,18 +2174,53 @@ class CanteenApp:
                 username = entries["username"].get().strip()
                 password = entries["password"].get().strip()
                 g_id = entries["g_id"].get().strip() or "3C50E0296E13C2467986A75791000008"
+                name = entries["name"].get().strip()
+
+                # 查找或创建本地账号配置（确保关键词等设置能同步到 GitHub Secrets）
+                existing = next((a for a in self._accounts if a["name"] == name), None)
+                if existing:
+                    cfg_path = os.path.join(os.path.dirname(__file__), existing["config_file"])
+                else:
+                    # 创建新账号
+                    config_file = AccountsManager.generate_config_file(self._accounts + [{}])
+                    new_account = {
+                        "name": name, "username": username, "password": password,
+                        "g_id": g_id, "config_file": config_file, "github_repo": repo_full,
+                    }
+                    cfg_path = os.path.join(os.path.dirname(__file__), config_file)
+                    clean_config = dict(DEFAULT_CONFIG)
+                    clean_config["keywords"] = []
+                    with open(cfg_path, "w", encoding="utf-8") as f:
+                        json.dump(clean_config, f, ensure_ascii=False, indent=2)
+                    self._accounts.append(new_account)
+                    AccountsManager.save(self._accounts, self._active_idx)
+
+                # 从本地配置文件读取关键词，同步到 GitHub Secrets
+                cfg = {}
+                if os.path.exists(cfg_path):
+                    with open(cfg_path, "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+
+                def _kw(keys):
+                    return ",".join(keys) if keys else ""
 
                 secrets_to_set = {
                     "GH_PAT": gh_pat,
                     "CANTEEN_USERNAME": username,
                     "CANTEEN_PASSWORD": password,
                     "CANTEEN_G_ID": g_id,
-                    "KEYWORDS": "",
-                    "EXCLUDE_KEYWORDS": "",
-                    "BREAKFAST_FIRST": "", "BREAKFAST_SECOND": "", "BREAKFAST_THIRD": "",
-                    "LUNCH_FIRST": "", "LUNCH_SECOND": "", "LUNCH_THIRD": "",
-                    "DINNER_FIRST": "", "DINNER_SECOND": "", "DINNER_THIRD": "",
-                    "AI_API_KEY": "",
+                    "KEYWORDS": _kw(cfg.get("keywords", [])),
+                    "EXCLUDE_KEYWORDS": _kw(cfg.get("exclude_keywords", [])),
+                    "BREAKFAST_FIRST": _kw(cfg.get("breakfast_first", [])),
+                    "BREAKFAST_SECOND": _kw(cfg.get("breakfast_second", [])),
+                    "BREAKFAST_THIRD": _kw(cfg.get("breakfast_third", [])),
+                    "LUNCH_FIRST": _kw(cfg.get("lunch_first", [])),
+                    "LUNCH_SECOND": _kw(cfg.get("lunch_second", [])),
+                    "LUNCH_THIRD": _kw(cfg.get("lunch_third", [])),
+                    "DINNER_FIRST": _kw(cfg.get("dinner_first", [])),
+                    "DINNER_SECOND": _kw(cfg.get("dinner_second", [])),
+                    "DINNER_THIRD": _kw(cfg.get("dinner_third", [])),
+                    "AI_API_KEY": cfg.get("ai_api_key", ""),
                 }
 
                 ok = 0
