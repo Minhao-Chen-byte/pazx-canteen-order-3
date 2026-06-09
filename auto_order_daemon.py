@@ -89,7 +89,7 @@ def run_once(client=None, account_idx=0):
         account = {"name": "GitHub Actions", "username": None, "password": None, "g_id": None}
 
     config = load_config()
-    # 检查是否有任何有效关键词
+    # 无关键词时用引擎内置的兜底逻辑（选第一个可用套餐）
     has_general_kw = bool(config.get("keywords"))
     has_meal_kw = any(
         config.get(f"{m}_{p}", [])
@@ -97,8 +97,7 @@ def run_once(client=None, account_idx=0):
         for p in ["first", "second", "third"]
     )
     if not has_general_kw and not has_meal_kw:
-        log(f"⚠️ [{account['name']}] 未配置关键词，跳过", also_print=True)
-        return False
+        log(f"ℹ️ [{account['name']}] 未配置关键词，将使用兜底策略（自动选第一个可用套餐）", also_print=True)
 
     if not client:
         client = CanteenClient(
