@@ -1,0 +1,88 @@
+name: 自动订餐
+
+on:
+  schedule:
+    # 每 10 分钟作为兜底触发器
+    - cron: '*/10 * * * *'
+  workflow_dispatch:  # 手动触发（也是自我维持链的入口）
+
+# 防止并发运行，同一时间只允许一个 run
+concurrency:
+  group: auto-order
+  cancel-in-progress: false
+
+jobs:
+  order-meal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350  # ~5.8 小时，接近 6h 上限
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 写入配置
+        env:
+          CFG_KEYWORDS: ${{ secrets.KEYWORDS }}
+          CFG_EXCLUDE: ${{ secrets.EXCLUDE_KEYWORDS }}
+          CFG_BF_FIRST: ${{ secrets.BREAKFAST_FIRST }}
+          CFG_BF_SECOND: ${{ secrets.BREAKFAST_SECOND }}
+          CFG_BF_THIRD: ${{ secrets.BREAKFAST_THIRD }}
+          CFG_LU_FIRST: ${{ secrets.LUNCH_FIRST }}
+          CFG_LU_SECOND: ${{ secrets.LUNCH_SECOND }}
+          CFG_LU_THIRD: ${{ secrets.LUNCH_THIRD }}
+          CFG_DN_FIRST: ${{ secrets.DINNER_FIRST }}
+          CFG_DN_SECOND: ${{ secrets.DINNER_SECOND }}
+          CFG_DN_THIRD: ${{ secrets.DINNER_THIRD }}
+          CFG_AI_KEY: ${{ secrets.AI_API_KEY }}
+        run: python .github/scripts/write_config.py
+
+      - name: 持续订餐循环（自我维持链）
+        env:
+          CANTEEN_USERNAME: ${{ secrets.CANTEEN_USERNAME }}
+          CANTEEN_PASSWORD: ${{ secrets.CANTEEN_PASSWORD }}
+          CANTEEN_G_ID: ${{ secrets.CANTEEN_G_ID }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_REPO: ${{ github.repository }}
+          GH_REF: ${{ github.ref_name }}
+        run: |
+          # 24小时不间断，每 10 分钟订餐一次
+          END_TIME=$(($(date +%s) + 19800))  # 5.5 小时后触发自重启
+          CYCLE=0
+
+          while [ $(date +%s) -lt $END_TIME ]; do
+            CYCLE=$((CYCLE + 1))
+            echo ""
+            echo "=============================================="
+            echo "  第 $CYCLE 次订餐检查  $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "=============================================="
+
+            python auto_order_daemon.py --once
+
+            NOW_TS=$(date +%s)
+            if [ $NOW_TS -lt $END_TIME ]; then
+              REMAIN=$(( (END_TIME - NOW_TS) / 60 ))
+              echo ""
+              echo "[等待] 10 分钟后下次检查（剩余 ${REMAIN} 分钟自动重启）"
+              sleep 600
+            fi
+          done
+
+          # 临近 6h 超时 → 触发下一个 run，保持链不断
+          echo ""
+          echo "=============================================="
+          echo "  [自重启] 触发下一次 workflow_dispatch..."
+          echo "=============================================="
+          curl -s -X POST \
+            -H "Authorization: Bearer ${GH_PAT}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GH_REPO}/actions/workflows/auto-order.yml/dispatches" \
+            -d "{\"ref\":\"${GH_REF}\"}"
+          echo ""
+          echo "[自重启] 完成，链已延续"
