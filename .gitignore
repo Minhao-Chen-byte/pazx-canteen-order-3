@@ -1,0 +1,32 @@
+# 自动订餐配置（含敏感信息，不能提交）
+auto_order_config.json
+auto_order_config_*.json
+
+# 账号配置（含凭证）
+accounts.json
+.github_token
+
+# 日志文件
+auto_order_daemon.log
+*.log
+
+# 聊天记忆
+chat_memory.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
