@@ -243,11 +243,9 @@ class CanteenClient:
         # 检查是否登录成功（被重定向到首页）
         if "getPage_getInfoPage.action" in html or "订餐" in html or "磐安中学" in html:
             self.logged_in = True
-            # 提取用户名
+            # 从页面提取用户姓名
             name_match = re.search(r'value="([^"]*)"\s*name="name"', html)
-            user_match = re.search(r"陈茗浩", html)
-            if user_match:
-                self.user_name = "陈茗浩"
+            self.user_name = name_match.group(1) if name_match else self._username
             return True, "登录成功！"
         else:
             err_match = re.search(r"<h4[^>]*>([^<]*)</h4>", html)
