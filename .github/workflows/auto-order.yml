@@ -2,11 +2,10 @@ name: 自动订餐
 
 on:
   schedule:
-    # 每 10 分钟作为兜底触发器
-    - cron: '*/10 * * * *'
-  workflow_dispatch:  # 手动触发（也是自我维持链的入口）
+    # 每日 13:50 北京时间 (05:50 UTC) 启动
+    - cron: '50 5 * * *'
+  workflow_dispatch:  # 手动触发
 
-# 防止并发运行，同一时间只允许一个 run
 concurrency:
   group: auto-order
   cancel-in-progress: false
@@ -14,7 +13,7 @@ concurrency:
 jobs:
   order-meal:
     runs-on: ubuntu-latest
-    timeout-minutes: 350  # ~5.8 小时，接近 6h 上限
+    timeout-minutes: 80  # 13:50~15:00 = 70分钟 + 缓冲
 
     steps:
       - uses: actions/checkout@v4
@@ -43,24 +42,27 @@ jobs:
           CFG_AI_KEY: ${{ secrets.AI_API_KEY }}
         run: python .github/scripts/write_config.py
 
-      - name: 持续订餐循环（自我维持链）
+      - name: 订餐循环（13:50 → 15:00，每 10 分钟一次）
         env:
           CANTEEN_USERNAME: ${{ secrets.CANTEEN_USERNAME }}
           CANTEEN_PASSWORD: ${{ secrets.CANTEEN_PASSWORD }}
           CANTEEN_G_ID: ${{ secrets.CANTEEN_G_ID }}
-          GH_PAT: ${{ secrets.GH_PAT }}
-          GH_REPO: ${{ github.repository }}
-          GH_REF: ${{ github.ref_name }}
         run: |
-          # 24小时不间断，每 10 分钟订餐一次
-          END_TIME=$(($(date +%s) + 19800))  # 5.5 小时后触发自重启
-          CYCLE=0
+          # 北京时间 15:00 = UTC 07:00
+          END_TIME=$(date -d "today 07:00 UTC" +%s)
+          NOW_TS=$(date +%s)
+          # 如果因为 cron 延迟导致当前时间已过 15:00，仍执行一次
+          if [ $NOW_TS -ge $END_TIME ]; then
+            END_TIME=$((NOW_TS + 60))
+          fi
 
+          CYCLE=0
           while [ $(date +%s) -lt $END_TIME ]; do
             CYCLE=$((CYCLE + 1))
             echo ""
             echo "=============================================="
             echo "  第 $CYCLE 次订餐检查  $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "  (北京时间 13:50-15:00)"
             echo "=============================================="
 
             python auto_order_daemon.py --once
@@ -69,20 +71,12 @@ jobs:
             if [ $NOW_TS -lt $END_TIME ]; then
               REMAIN=$(( (END_TIME - NOW_TS) / 60 ))
               echo ""
-              echo "[等待] 10 分钟后下次检查（剩余 ${REMAIN} 分钟自动重启）"
+              echo "[等待] 10 分钟后下次检查（${REMAIN} 分钟后结束）"
               sleep 600
             fi
           done
 
-          # 临近 6h 超时 → 触发下一个 run，保持链不断
           echo ""
           echo "=============================================="
-          echo "  [自重启] 触发下一次 workflow_dispatch..."
+          echo "  今日订餐窗口结束 (15:00)，明天 13:50 继续"
           echo "=============================================="
-          curl -s -X POST \
-            -H "Authorization: Bearer ${GH_PAT}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${GH_REPO}/actions/workflows/auto-order.yml/dispatches" \
-            -d "{\"ref\":\"${GH_REF}\"}"
-          echo ""
-          echo "[自重启] 完成，链已延续"
