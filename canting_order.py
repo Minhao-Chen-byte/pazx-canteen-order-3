@@ -35,9 +35,9 @@ except ImportError:
 
 # ==================== 配置 ====================
 BASE_URL = "http://pazx.yksmart3.com:18288"
-G_ID = os.environ.get("CANTEEN_G_ID", "3C50E0296E13C2467986A75791000008")
-USERNAME = os.environ.get("CANTEEN_USERNAME", "330727200909170038")
-PASSWORD = os.environ.get("CANTEEN_PASSWORD", "111111")
+G_ID = os.environ.get("CANTEEN_G_ID", "")
+USERNAME = os.environ.get("CANTEEN_USERNAME", "")
+PASSWORD = os.environ.get("CANTEEN_PASSWORD", "")
 BIZ_ID = os.environ.get("CANTEEN_BIZ_ID", "81011")
 ORG_ID = os.environ.get("CANTEEN_ORG_ID", "01")
 SUB_ORG_ID = os.environ.get("CANTEEN_SUB_ORG_ID", "000")
@@ -100,20 +100,12 @@ class AccountsManager:
 
     DEFAULT_ACCOUNTS = [
         {
-            "name": "陈茗浩",
-            "username": "330727200909170038",
-            "password": "111111",
-            "g_id": "3C50E0296E13C2467986A75791000008",
+            "name": "新账号",
+            "username": "",
+            "password": "",
+            "g_id": "",
             "config_file": "auto_order_config.json",
-            "github_repo": "Minhao-Chen-byte/pazx-canteen-order",
-        },
-        {
-            "name": "账号2",
-            "username": "330727201002023528",
-            "password": "111111",
-            "g_id": "3C50E0296E13C2467986A75791000008",
-            "config_file": "auto_order_config_2.json",
-            "github_repo": "Minhao-Chen-byte/pazx-canteen-order-2",
+            "github_repo": "",
         },
     ]
 
@@ -664,22 +656,28 @@ DEFAULT_CONFIG = {
 
 
 def load_config():
-    """加载配置文件"""
+    """加载配置文件（自动解密 ai_api_key）"""
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             config = json.load(f)
             # 合并默认值，确保新字段存在
             for k, v in DEFAULT_CONFIG.items():
                 config.setdefault(k, v)
+            # 解密 API Key
+            if config.get("ai_api_key"):
+                config["ai_api_key"] = _decrypt_field(config["ai_api_key"])
             return config
     except (FileNotFoundError, json.JSONDecodeError):
         return dict(DEFAULT_CONFIG)
 
 
 def save_config(config):
-    """保存配置文件"""
+    """保存配置文件（自动加密 ai_api_key）"""
+    cfg = dict(config)
+    if cfg.get("ai_api_key"):
+        cfg["ai_api_key"] = _encrypt_field(cfg["ai_api_key"])
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
 
 
 # ==================== 关键词匹配引擎 ====================
@@ -2058,7 +2056,7 @@ class CanteenApp:
             if key == "g_id":
                 var.set("3C50E0296E13C2467986A75791000008")
             elif key == "password":
-                var.set("111111")
+                var.set("")
             entry = ttk.Entry(frame, textvariable=var, width=40, font=("Microsoft YaHei", 9))
             if key == "password":
                 entry.config(show="*")
