@@ -2,8 +2,8 @@ name: 自动订餐
 
 on:
   schedule:
-    # 每日 13:50 北京时间 (05:50 UTC) 启动
-    - cron: '50 5 * * *'
+    # 每日 13:51 北京时间 (05:51 UTC) 启动
+    - cron: '51 5 * * *'
   workflow_dispatch:  # 手动触发
 
 concurrency:
@@ -13,7 +13,7 @@ concurrency:
 jobs:
   order-meal:
     runs-on: ubuntu-latest
-    timeout-minutes: 80  # 13:50~15:00 = 70分钟 + 缓冲
+    timeout-minutes: 80  # 13:51~15:00 = 70分钟 + 缓冲
 
     steps:
       - uses: actions/checkout@v4
@@ -42,11 +42,20 @@ jobs:
           CFG_AI_KEY: ${{ secrets.AI_API_KEY }}
         run: python .github/scripts/write_config.py
 
-      - name: 订餐循环（13:50 → 15:00，每 10 分钟一次）
+      - name: 订餐循环（13:51 → 15:00，每 10 分钟一次）
         env:
           CANTEEN_USERNAME: ${{ secrets.CANTEEN_USERNAME }}
           CANTEEN_PASSWORD: ${{ secrets.CANTEEN_PASSWORD }}
           CANTEEN_G_ID: ${{ secrets.CANTEEN_G_ID }}
+          CANTEEN_NAME: ${{ secrets.CANTEEN_NAME }}
+          CANTEEN_USERNAME_2: ${{ secrets.CANTEEN_USERNAME_2 }}
+          CANTEEN_PASSWORD_2: ${{ secrets.CANTEEN_PASSWORD_2 }}
+          CANTEEN_G_ID_2: ${{ secrets.CANTEEN_G_ID_2 }}
+          CANTEEN_NAME_2: ${{ secrets.CANTEEN_NAME_2 }}
+          CANTEEN_USERNAME_3: ${{ secrets.CANTEEN_USERNAME_3 }}
+          CANTEEN_PASSWORD_3: ${{ secrets.CANTEEN_PASSWORD_3 }}
+          CANTEEN_G_ID_3: ${{ secrets.CANTEEN_G_ID_3 }}
+          CANTEEN_NAME_3: ${{ secrets.CANTEEN_NAME_3 }}
         run: |
           # 北京时间 15:00 = UTC 07:00
           END_TIME=$(date -d "today 07:00 UTC" +%s)
@@ -56,7 +65,7 @@ jobs:
           if [ $NOW_TS -ge $END_TIME ]; then
             OUTSIDE_WINDOW=true
             END_TIME=$((NOW_TS + 60))
-            echo "[注意] 当前不在订餐窗口内（13:50-15:00 北京时间），执行一次检查"
+            echo "[注意] 当前不在订餐窗口内（13:51-15:00 北京时间），执行一次检查"
           fi
 
           CYCLE=0
@@ -65,10 +74,10 @@ jobs:
             echo ""
             echo "=============================================="
             echo "  第 $CYCLE 次订餐检查  $(date '+%Y-%m-%d %H:%M:%S')"
-            echo "  (北京时间 13:50-15:00)"
+            echo "  (北京时间 13:51-15:00)"
             echo "=============================================="
 
-            python auto_order_daemon.py --once
+            python auto_order_daemon.py --all
 
             # 非窗口期只跑一次就退出
             if [ "$OUTSIDE_WINDOW" = true ]; then
@@ -90,5 +99,5 @@ jobs:
 
           echo ""
           echo "=============================================="
-          echo "  今日订餐窗口结束 (15:00)，明天 13:50 继续"
+          echo "  今日订餐窗口结束 (15:00)，明天 13:51 继续"
           echo "=============================================="
