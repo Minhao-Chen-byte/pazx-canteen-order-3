@@ -62,7 +62,7 @@ def _get_or_create_key():
     try:
         import subprocess
         subprocess.run(["attrib", "+H", MASTER_KEY_FILE],
-                       capture_output=True, shell=True)
+                       capture_output=True)
     except Exception:
         pass
     return key
@@ -953,14 +953,21 @@ class AutoOrderEngine:
                         on_done(False, msg)
                     return
 
-            # 2. 获取已订餐信息
-            summary, total = self.client.get_settlement_summary()
-            if not summary:
-                msg = self.logger.add("获取订餐统计失败", "ERROR")
-                if on_log:
-                    on_log(msg)
-                if on_done:
-                    on_done(False, msg)
+            # 2. 生成候选日期（不再依赖失效的结算统计页面）
+            now = datetime.now()
+            today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            # 从首订日期起 14 天，只取 ≥ 今天的日期
+            first_date_dt = datetime.strptime("2026-06-11", "%Y-%m-%d")
+            candidate_dates = []
+            for i in range(14):
+                d = first_date_dt + timedelta(days=i)
+                if d >= today:
+                    candidate_dates.append(d.strftime("%Y-%m-%d"))
+
+            if not candidate_dates:
+                msg = self.logger.add("无可用候选日期", "WARN")
+                if on_log: on_log(msg)
+                if on_done: on_done(False, msg)
                 return
 
             # 3. 找出未订的餐次
@@ -971,35 +978,18 @@ class AutoOrderEngine:
             min_balance = self.config.get("min_balance", 5.0)
             ordered_count = 0
 
-            for row_idx, row in enumerate(summary):
+            for row_idx, full_date in enumerate(candidate_dates):
                 # 已达总上限，跳过剩余日期
                 if ordered_count >= max_meals:
                     msg = self.logger.add(f"📌 已达订餐总数上限({max_meals}餐)，停止检查", "INFO")
                     if on_log: on_log(msg)
                     break
 
-                date_str = row["date"]
-                # 只跳过昨天及更早的日期（保留今天，允许当日订餐）
-                try:
-                    dt = datetime.strptime(date_str, "%m/%d")
-                    now = datetime.now()
-                    meal_date = datetime(now.year, dt.month, dt.day)
-                    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-                    if meal_date < today:
-                        continue
-                except ValueError:
-                    continue
-
-                # 先解析此日期所有餐次的完整日期
-                parts = date_str.split("/")
-                full_date = f"{datetime.now().year}-{int(parts[0]):02d}-{int(parts[1]):02d}"
-
                 # 先访问订餐主页，初始化 session 状态
                 self.client.visit_shop_page(full_date, 2)
                 time.sleep(0.3)
 
                 # 餐次轮换：不同日期从不同餐次开始尝试，确保各餐都有机会
-                # row_idx % 3  → 0:早→午→晚  1:午→晚→早  2:晚→早→午
                 meal_start = row_idx % 3
                 for offset in range(3):
                     meal_idx = (meal_start + offset) % 3
@@ -1008,11 +998,8 @@ class AutoOrderEngine:
 
                     if ordered_count >= max_meals:
                         break
-                    status = row["meals"][meal_idx]
-                    if status != "未订":
-                        continue
 
-                    key = (date_str, meal_code)
+                    key = (full_date, meal_code)
                     if key in self._ordered_set:
                         continue
 
@@ -1105,7 +1092,24 @@ class AutoOrderEngine:
                             if best:
                                 break
 
-                                        # 所有志愿均未匹配 → 兜底选第一个可用套餐
+                    # 没有志愿匹配上 → 用通用关键词再试一次
+                    if not best and keywords:
+                        for item in items:
+                            text = (item["name"] + " " + item["description"]).lower()
+                            match = any(k.lower() in text for k in keywords)
+                            if match:
+                                exclude = any(ek.lower() in text for ek in meal_dislikes)
+                                if not exclude:
+                                    best = item
+                                    chosen_priority = "通用关键词"
+                                    msg_dbg = self.logger.add(
+                                        f"{full_date} {meal_name} "
+                                        f"通用关键词匹配: {item['name']} (关键词: {keywords})", "INFO"
+                                    )
+                                    if on_log: on_log(msg_dbg)
+                                    break
+
+                    # 所有志愿均未匹配 → 兜底选第一个可用套餐
                     if not best and items:
                         best = items[0]
                         chosen_priority = "兜底"
@@ -1140,11 +1144,7 @@ class AutoOrderEngine:
                         return
 
                     # 7. 统一订购循环：先尝试已选套餐，失败后启动 AI/自动兜底
-                    # 先确保 AI 配置与当前 config 同步
-                    self.ai.api_key = self.config.get("ai_api_key", "")
-                    self.ai.model = self.config.get("ai_model", "deepseek-v4-flash")
-                    self.ai.api_url = self.config.get("ai_api_url", "https://api.deepseek.com/v1")
-                    self.ai.backend = self.config.get("ai_api_type", AIEnhancer.BACKEND_OPENAI)
+                    # AI 配置在 __init__ / update_config 中已同步，无需重复设置
 
                     # 构建有序备选套餐列表
                     ordered = [best]  # 已选中的套餐排第一
@@ -2052,7 +2052,7 @@ class CanteenApp:
                 row=r, column=0, sticky="w", pady=4)
             var = tk.StringVar()
             if key == "g_id":
-                var.set("3C50E0296E13C2467986A75791000008")
+                var.set(G_ID or "")
             elif key == "password":
                 var.set("")
             entry = ttk.Entry(frame, textvariable=var, width=40, font=("Microsoft YaHei", 9))
@@ -2066,9 +2066,10 @@ class CanteenApp:
         ttk.Label(frame, text="GitHub 仓库", font=("Microsoft YaHei", 9)).grid(
             row=repo_row, column=0, sticky="w", pady=4)
 
-        # 自动生成仓库名
+        # 自动生成仓库名（用户名从环境变量/GitHub API 获取）
         repo_num = len(self._accounts) + 1
-        default_repo = f"Minhao-Chen-byte/pazx-canteen-order-{repo_num}" if repo_num > 1 else "Minhao-Chen-byte/pazx-canteen-order"
+        gh_user = os.environ.get("GITHUB_USER", "your-username")
+        default_repo = f"{gh_user}/pazx-canteen-order-{repo_num}" if repo_num > 1 else f"{gh_user}/pazx-canteen-order"
         entries["github_repo"] = tk.StringVar(value=default_repo)
         repo_entry = ttk.Entry(frame, textvariable=entries["github_repo"], width=25,
                                font=("Microsoft YaHei", 9))
@@ -2109,7 +2110,7 @@ class CanteenApp:
         def do_create_repo():
             repo_full = entries["github_repo"].get().strip()
             if not repo_full or "/" not in repo_full:
-                progress_var.set("❌ 仓库格式错误，如 Minhao-Chen-byte/pazx-canteen-order")
+                progress_var.set("❌ 仓库格式错误，如 your-username/pazx-canteen-order")
                 return
             parts = repo_full.split("/")
             owner, repo_name = parts[0], parts[1]
@@ -2230,7 +2231,7 @@ class CanteenApp:
                 gh_pat = _get_github_token()
                 username = entries["username"].get().strip()
                 password = entries["password"].get().strip()
-                g_id = entries["g_id"].get().strip() or "3C50E0296E13C2467986A75791000008"
+                g_id = entries["g_id"].get().strip() or G_ID or ""
                 name = entries["name"].get().strip()
 
                 # 查找或创建本地账号配置（确保关键词等设置能同步到 GitHub Secrets）
@@ -2310,7 +2311,7 @@ class CanteenApp:
             name = entries["name"].get().strip()
             username = entries["username"].get().strip()
             password = entries["password"].get().strip()
-            g_id = entries["g_id"].get().strip() or "3C50E0296E13C2467986A75791000008"
+            g_id = entries["g_id"].get().strip() or G_ID or ""
             repo = entries["github_repo"].get().strip()
 
             if not name or not username or not password:
@@ -2751,11 +2752,11 @@ class CanteenApp:
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # 绑定鼠标滚轮
+        # 绑定鼠标滚轮（仅限 canvas 及子控件区域）
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        scroll_frame.bind("<Destroy>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        canvas.bind("<MouseWheel>", _on_mousewheel)
+        scroll_frame.bind("<MouseWheel>", _on_mousewheel)
 
         row = 0
 
